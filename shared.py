@@ -871,9 +871,102 @@ def setup():
     # runs. Seeding here makes setup self-sufficient regardless of data dir.
     seed_remote_plugins()
 
+    # Provider credentials: a provider whose models.yml api_key is a
+    # `$secret:`/`$env:` reference that does not resolve makes every LLM call
+    # to it fail with a bare upstream 401 (empty bearer) - an incoherent,
+    # SILENT state that looks like a provider outage (dev-stack incident
+    # 2026-09-27/28). The runtime now refuses such a request with an explicit
+    # error naming provider + secret; report the same condition here, at the
+    # documented provisioning point, before the first thread runs.
+    print("\n[Verifying provider LLM credentials...]")
+    verify_provider_secrets()
+
     print(f"\n{'=' * 50}")
     print(f"  Setup complete! Channel: {s.setup_channel}")
     print(f"{'=' * 50}")
+
+
+# Provider api_key references declared in config/models.yml, e.g.
+#   api_key: "$secret:DEEPSEEK_API_KEY"   /   api_key: $env:MY_PROVIDER_KEY
+PROVIDER_KEY_REF_RE = re.compile(
+    r"(?m)^\s+api_key:\s*[\"']?\$(secret|env):([A-Za-z0-9_]+)")
+
+
+def verify_provider_secrets():
+    """Report provider api_key references that do not resolve in THIS stack.
+
+    A provider whose models.yml api_key is a `$secret:`/`$env:` reference that
+    does not resolve produces a SILENT, incoherent state: the stack looks
+    configured, the request goes out with an EMPTY bearer token and the upstream
+    provider answers with a bare 401 ("Authentication Fails (auth header format
+    should be Bearer sk-...)"). That unexplained oddity made real-LLM dev
+    verification impossible (dev-stack incident 2026-09-27/28).
+
+    The runtime refuses such a request with an explicit error naming the
+    provider and the missing reference; this check surfaces the same condition
+    at the documented provisioning point (right after secrets.env was seeded),
+    so a missing credential is visible BEFORE the first dev thread runs.
+
+    Never fatal: a stack that intentionally runs the noop provider, or a
+    provider without auth, keeps working. Returns the list of missing refs.
+    """
+    s = sett()
+    models_yml = os.path.join(s.omni_stack_dir, "config", "models.yml")
+    try:
+        with open(models_yml) as f:
+            content = f.read()
+    except OSError:
+        return []
+
+    refs = PROVIDER_KEY_REF_RE.findall(content)
+    if not refs:
+        return []
+
+    env_file_keys = set()
+    try:
+        with open(s.env_path) as f:
+            for line in f:
+                if "=" in line and not line.lstrip().startswith("#"):
+                    env_file_keys.add(line.split("=", 1)[0].strip())
+    except OSError:
+        pass
+
+    secret_names = set()
+    try:
+        resp = oc_curl("GET", "/secrets")
+        for row in resp.get("data", []) or []:
+            if row.get("name"):
+                secret_names.add(row["name"])
+    except Exception as e:  # noqa: BLE001 - report, never fail the setup
+        print(f"  [provider secrets] WARNING: could not list secrets ({e})")
+        return []
+
+    missing = []
+    for kind, name in refs:
+        if kind == "secret":
+            if name not in secret_names:
+                missing.append(f"$secret:{name}")
+        elif not os.environ.get(name) and name not in env_file_keys:
+            missing.append(f"$env:{name}")
+
+    if not missing:
+        print(f"  [provider secrets] OK: {len(refs)} provider api_key reference(s) resolved")
+        return []
+
+    secrets_env_path = os.path.join(s.script_dir, "secrets.env")
+    print("  " + "!" * 68)
+    for ref in missing:
+        print(f"  [provider secrets] UNRESOLVED: {ref}")
+    print(f"  Stack '{s.project_name}' cannot authenticate LLM calls for the providers")
+    print("  using them. Such a request is now REFUSED with an explicit")
+    print("  'Provider <name> has an unresolved API key reference' error instead of")
+    print("  a bare upstream 401 (an empty bearer token that hides this cause).")
+    print(f"  Fix: add {', '.join(missing)} to")
+    print(f"       {secrets_env_path}")
+    print("       (one NAME=value per line, no quotes) and re-run the setup:")
+    print("       python3 omnidev.py setup   (dev stack)")
+    print("  " + "!" * 68)
+    return missing
 
 
 def _minimal_yaml_map(path):
