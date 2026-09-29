@@ -513,7 +513,7 @@ def generate_env(mode="dev"):
         # plugin (omni-plugins) indexes the shared wiki into Qdrant with a
         # LOCAL vectorizer - no LLM / embedding API is involved. hindsight
         # stays disabled (no LLM key is wired for it in the omni-root compose).
-        profiles = "noop,mattermost,qdrant"
+        profiles = "noop,mattermost,qdrant,workstation"
         f.write(f"COMPOSE_PROFILES={profiles}\n")
         f.write("QDRANT_URL=http://qdrant:6333\n")
         f.write("\n")
@@ -523,6 +523,16 @@ def generate_env(mode="dev"):
             f.write(f"OMNIAGENT_IMAGE=ghcr.io/nexuslbs/omni-deployer/omniagent{tag}\n")
             f.write(f"DASHBOARD_IMAGE=ghcr.io/nexuslbs/omni-deployer/dashboard{tag}\n")
             f.write(f"TOOLBOX_IMAGE=ghcr.io/nexuslbs/omni-deployer/toolbox{tag}\n")
+            # workstation images: pinned to the workstation chain release
+            # (v0.0.8) - the compose defaults are :latest / :0.0.1, the env
+            # pins make the stable stack reproducible.
+            f.write(f"WORKSTATION_IMAGE=ghcr.io/nexuslbs/deepseek-harness:0.0.8\n")
+            f.write(f"WORKSTATION_TOOLS_IMAGE=ghcr.io/nexuslbs/omni-images/workstation-tools:0.0.8\n")
+            # workstation images: pinned to the workstation chain release
+            # (v0.0.8) - the compose defaults are :latest / :0.0.1, the env
+            # pins make the stable stack reproducible.
+            f.write(f"WORKSTATION_IMAGE=ghcr.io/nexuslbs/deepseek-harness:0.0.8\n")
+            f.write(f"WORKSTATION_TOOLS_IMAGE=ghcr.io/nexuslbs/omni-images/workstation-tools:0.0.8\n")
         f.write("\n")
         f.write(f"# Database passwords (randomly generated)\n")
         f.write(f"POSTGRES_PASSWORD={p1}\n")
