@@ -14727,16 +14727,40 @@ def _seg_46():
         refused loudly instead of being sent as an empty bearer token), so the
         group has to own the secret its fixture refers to (group isolation
         contract). Returns True when this call created the row, so the caller
-        can remove it again.
+        can remove it again. NOTE: the secrets API is mounted at {BASE}/secrets
+        (NOT /api/secrets), so it bypasses the api_get/api_post /api prefix.
         """
-        listed = api_get("/secrets")
-        if isinstance(listed, dict):
-            listed = listed.get("data") or listed.get("secrets") or []
-        names = {s.get("name") for s in listed if isinstance(s, dict)}
+        names = set()
+        try:
+            with urllib.request.urlopen(f"{BASE}/secrets", timeout=10) as r:
+                listed = json.loads(r.read())
+            if isinstance(listed, dict):
+                listed = listed.get("data") or listed.get("secrets") or []
+            if isinstance(listed, list):
+                names = {s.get("name") for s in listed if isinstance(s, dict)}
+        except Exception:
+            names = set()
         if name in names:
             return False
-        api_post("/secrets", {"name": name, "value": value})
+        req = urllib.request.Request(
+            f"{BASE}/secrets",
+            data=json.dumps(
+                {"name": name, "fieldType": "password", "value": value}
+            ).encode(),
+            method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=20) as r:
+            assert r.status in (200, 201), f"could not create secret {name}: HTTP {r.status}"
         return True
+
+    def _g46_delete_secret(name):
+        """Remove a fixture secret created by _g46_ensure_secret (best effort)."""
+        try:
+            req = urllib.request.Request(f"{BASE}/secrets/{name}", method="DELETE")
+            urllib.request.urlopen(req, timeout=20).read()
+        except Exception as e:
+            print(f"[46] fixture secret cleanup skipped for {name}: {e}")
 
     def _g46_providers_from_plugins(data):
         if isinstance(data, list):
@@ -14956,7 +14980,7 @@ def _seg_46():
             srv.shutdown()
             restore_models_yml()
             if created_secret:
-                api_delete("/secrets/MY_SECRET", raise_on_error=False)
+                _g46_delete_secret("MY_SECRET")
 
     print("GROUP 46: models.yml provider/model overrides (CRUD API + plugin-less + absent-file + refresh upsert)")
     test(test_46_models_crud)
