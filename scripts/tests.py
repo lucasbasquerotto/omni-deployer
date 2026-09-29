@@ -14720,6 +14720,24 @@ def _seg_46():
         except urllib.error.HTTPError as e:
             return e.code, e.read().decode("utf-8", errors="replace")
 
+    def _g46_ensure_secret(name, value):
+        """Ensure a $secret: reference used by this group's models.yml fixture
+        actually resolves. The refresh path resolves a DECLARED api_key
+        reference strictly (omniagent 2c24d1a: an unresolved reference is
+        refused loudly instead of being sent as an empty bearer token), so the
+        group has to own the secret its fixture refers to (group isolation
+        contract). Returns True when this call created the row, so the caller
+        can remove it again.
+        """
+        listed = api_get("/secrets")
+        if isinstance(listed, dict):
+            listed = listed.get("data") or listed.get("secrets") or []
+        names = {s.get("name") for s in listed if isinstance(s, dict)}
+        if name in names:
+            return False
+        api_post("/secrets", {"name": name, "value": value})
+        return True
+
     def _g46_providers_from_plugins(data):
         if isinstance(data, list):
             return [p for p in data if isinstance(p, dict) and p.get("plugin_type") == "provider"]
@@ -14876,7 +14894,12 @@ def _seg_46():
         srv = socketserver.TCPServer(("127.0.0.1", 0), _G46H)
         port = srv.server_address[1]
         threading.Thread(target=srv.serve_forever, daemon=True).start()
+        created_secret = False
         try:
+            # Fixture precondition: models.yml declares api_key: $secret:MY_SECRET
+            # (below), and the refresh path resolves that reference strictly, so
+            # create the secret the fixture refers to before the refresh POST.
+            created_secret = _g46_ensure_secret("MY_SECRET", "g46-refresh-secret")
             models_yml = """providers:
   my_provider_01:
     plugin: false
@@ -14932,6 +14955,8 @@ def _seg_46():
         finally:
             srv.shutdown()
             restore_models_yml()
+            if created_secret:
+                api_delete("/secrets/MY_SECRET", raise_on_error=False)
 
     print("GROUP 46: models.yml provider/model overrides (CRUD API + plugin-less + absent-file + refresh upsert)")
     test(test_46_models_crud)
