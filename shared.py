@@ -566,7 +566,7 @@ def generate_env(mode="dev"):
             f.write(f"TOOLBOX_IMAGE=ghcr.io/nexuslbs/omni-deployer/toolbox{tag}\n")
             # core harness: pinned for stable, local build in dev (the dev
             # overlay sets image: local/workstation:latest).
-            f.write(f"WORKSTATION_IMAGE=ghcr.io/nexuslbs/deepseek-harness:0.0.8\n")
+            f.write(f"WORKSTATION_IMAGE=ghcr.io/nexuslbs/deepseek-harness:0.0.9\n")
         # workstation EQUIPMENT images: pinned to the PUBLISHED chain refs in
         # BOTH modes. DEV pins them so omnidev exercises the SAME published
         # images as stable/prod instead of silently building local/ copies.
