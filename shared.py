@@ -533,7 +533,7 @@ def generate_env(mode="dev"):
             f.write(f"WORKSTATION_IMAGE=ghcr.io/nexuslbs/deepseek-harness:0.0.8\n")
             f.write(f"WORKSTATION_TOOLS_IMAGE=ghcr.io/nexuslbs/omni-images/workstation-tools:0.0.11\n")
             f.write(f"WORKSTATION_DATASCI_IMAGE=ghcr.io/nexuslbs/omni-images/workstation-datasci:0.0.8\n")
-            f.write(f"WORKSTATION_OFFICE_IMAGE=ghcr.io/nexuslbs/omni-images/workstation-office:0.0.10\n")
+            f.write(f"WORKSTATION_OFFICE_IMAGE=ghcr.io/nexuslbs/omni-images/workstation-office:0.0.11\n")
             f.write(f"WORKSTATION_MEDIA_IMAGE=ghcr.io/nexuslbs/omni-images/workstation-media:0.0.9\n")
         f.write("\n")
         f.write(f"# Database passwords (randomly generated)\n")
