@@ -64,6 +64,40 @@ def _compose_cmd():
     return args
 
 
+def _dev_pins_overlay():
+    """Path of the dev published-pin overlay when the env pins the concerns.
+
+    The dev overlay (docker-compose.dev.yml) gives each workstation concern a
+    `build:` row tagged local/workstation-<name>:latest. When generate_env
+    pinned the PUBLISHED equipment refs (WORKSTATION_*_IMAGE), a plain merged
+    `up` would build the local copy and re-tag the published ghcr name, or run
+    the local/ image - either defeats the pin. docker-compose.dev-pins.yml
+    drops those build rows (`!reset`) and takes the image from the env pin.
+
+    Returns the overlay path only when BOTH the file exists AND the env file
+    actually carries the concern pins; with no pins the local-build workflow
+    is left untouched (the overlay is never applied).
+    """
+    s = sett()
+    if s.dev_overlay is None:
+        return None
+    pins_path = os.path.join(s.omni_stack_dir, "docker-compose.dev-pins.yml")
+    if not os.path.exists(pins_path):
+        return None
+    pin_keys = (
+        "WORKSTATION_TOOLS_IMAGE=",
+        "WORKSTATION_DATASCI_IMAGE=",
+        "WORKSTATION_OFFICE_IMAGE=",
+        "WORKSTATION_MEDIA_IMAGE=",
+    )
+    try:
+        with open(s.env_path) as f:
+            pinned = any(line.startswith(pin_keys) for line in f)
+    except OSError:
+        return None
+    return pins_path if pinned else None
+
+
 def run_compose(*args):
     return subprocess.run(_compose_cmd() + list(args), capture_output=True, text=True)
 
@@ -513,11 +547,14 @@ def generate_env(mode="dev"):
         # plugin (omni-plugins) indexes the shared wiki into Qdrant with a
         # LOCAL vectorizer - no LLM / embedding API is involved. hindsight
         # stays disabled (no LLM key is wired for it in the omni-root compose).
-        # The stable stack additionally enables the concern profiles
-        # (datasci, office, media) so all four workstation-* images are used.
-        profiles = "noop,mattermost,qdrant,workstation"
-        if mode == "stable":
-            profiles += ",datasci,office,media"
+        # BOTH modes enable the concern profiles (datasci, office, media) so
+        # all four workstation-* images are actually started. DEV runs them
+        # too because the published equipment pins below are only meaningful
+        # when the profile-gated concern services come up. The local-build
+        # dev workflow stays available: OMNI_DEV_LOCAL_WORKSTATION_IMAGES=1
+        # suppresses the pins, and with no pins the launcher does not apply
+        # docker-compose.dev-pins.yml, so the dev overlay's build rows win.
+        profiles = "noop,mattermost,qdrant,workstation,datasci,office,media"
         f.write(f"COMPOSE_PROFILES={profiles}\n")
         f.write("QDRANT_URL=http://qdrant:6333\n")
         f.write("\n")
@@ -527,10 +564,17 @@ def generate_env(mode="dev"):
             f.write(f"OMNIAGENT_IMAGE=ghcr.io/nexuslbs/omni-deployer/omniagent{tag}\n")
             f.write(f"DASHBOARD_IMAGE=ghcr.io/nexuslbs/omni-deployer/dashboard{tag}\n")
             f.write(f"TOOLBOX_IMAGE=ghcr.io/nexuslbs/omni-deployer/toolbox{tag}\n")
-            # workstation images: pinned to the workstation chain release
-            # (v0.0.9) - the compose defaults are :latest / :0.0.1, the env
-            # pins make the stable stack reproducible.
+            # core harness: pinned for stable, local build in dev (the dev
+            # overlay sets image: local/workstation:latest).
             f.write(f"WORKSTATION_IMAGE=ghcr.io/nexuslbs/deepseek-harness:0.0.8\n")
+        # workstation EQUIPMENT images: pinned to the PUBLISHED chain refs in
+        # BOTH modes. DEV pins them so omnidev exercises the SAME published
+        # images as stable/prod instead of silently building local/ copies.
+        # The launcher then applies docker-compose.dev-pins.yml, which drops
+        # the dev overlay's build rows (`!reset`) so the pins win; with no
+        # pins (OMNI_DEV_LOCAL_WORKSTATION_IMAGES=1) that overlay is not
+        # applied and the local-build workflow is unchanged.
+        if mode == "stable" or not os.environ.get("OMNI_DEV_LOCAL_WORKSTATION_IMAGES", "").strip():
             f.write(f"WORKSTATION_TOOLS_IMAGE=ghcr.io/nexuslbs/omni-images/workstation-tools:0.0.11\n")
             f.write(f"WORKSTATION_DATASCI_IMAGE=ghcr.io/nexuslbs/omni-images/workstation-datasci:0.0.8\n")
             f.write(f"WORKSTATION_OFFICE_IMAGE=ghcr.io/nexuslbs/omni-images/workstation-office:0.0.11\n")
@@ -662,7 +706,11 @@ def start_services():
     s = sett()
     print(f"\n=== Starting services (project={s.project_name}) ===")
     if s.dev_overlay:
-        r = sh(f"docker compose -f {s.compose_file} -f {s.dev_overlay} --env-file {s.env_path} -p {s.project_name} up -d 2>&1")
+        files = f"-f {s.compose_file} -f {s.dev_overlay}"
+        pins_overlay = _dev_pins_overlay()
+        if pins_overlay:
+            files += f" -f {pins_overlay}"
+        r = sh(f"docker compose {files} --env-file {s.env_path} -p {s.project_name} up -d 2>&1")
     else:
         pull_flag = ""
         if os.path.exists(s.env_path):
