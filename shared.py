@@ -528,13 +528,13 @@ def generate_env(mode="dev"):
             f.write(f"DASHBOARD_IMAGE=ghcr.io/nexuslbs/omni-deployer/dashboard{tag}\n")
             f.write(f"TOOLBOX_IMAGE=ghcr.io/nexuslbs/omni-deployer/toolbox{tag}\n")
             # workstation images: pinned to the workstation chain release
-            # (v0.0.8) - the compose defaults are :latest / :0.0.1, the env
+            # (v0.0.9) - the compose defaults are :latest / :0.0.1, the env
             # pins make the stable stack reproducible.
             f.write(f"WORKSTATION_IMAGE=ghcr.io/nexuslbs/deepseek-harness:0.0.8\n")
-            f.write(f"WORKSTATION_TOOLS_IMAGE=ghcr.io/nexuslbs/omni-images/workstation-tools:0.0.8\n")
+            f.write(f"WORKSTATION_TOOLS_IMAGE=ghcr.io/nexuslbs/omni-images/workstation-tools:0.0.9\n")
             f.write(f"WORKSTATION_DATASCI_IMAGE=ghcr.io/nexuslbs/omni-images/workstation-datasci:0.0.8\n")
-            f.write(f"WORKSTATION_OFFICE_IMAGE=ghcr.io/nexuslbs/omni-images/workstation-office:0.0.8\n")
-            f.write(f"WORKSTATION_MEDIA_IMAGE=ghcr.io/nexuslbs/omni-images/workstation-media:0.0.8\n")
+            f.write(f"WORKSTATION_OFFICE_IMAGE=ghcr.io/nexuslbs/omni-images/workstation-office:0.0.9\n")
+            f.write(f"WORKSTATION_MEDIA_IMAGE=ghcr.io/nexuslbs/omni-images/workstation-media:0.0.9\n")
         f.write("\n")
         f.write(f"# Database passwords (randomly generated)\n")
         f.write(f"POSTGRES_PASSWORD={p1}\n")
