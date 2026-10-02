@@ -9633,9 +9633,21 @@ def _seg_27():
 
 
     def _h27_nonhook_ground(base):
-        """Count non-hook messages inserted after base (SQL ground truth)."""
+        """Count non-hook messages inserted after base (SQL ground truth).
+
+    The thread-end Usage message (msg_type='usage') is EXCLUDED from the ground
+    truth: the agent core inserts it as internal bookkeeping with a DELIBERATE
+    exception from the new_message hook (omniagent response_handler.rs,
+    insert_thread_usage_message: "Inlined create_message INSERT (no new_message
+    hook: the Usage message is internal bookkeeping, never delivered to the
+    platform)"). It is therefore not a hook-visible event and the observer
+    counter can never see it. Every terminated non-skipped thread carries
+    exactly one, so counting it here broke the observer==ground invariant for
+    every thread terminating inside the measurement window (observed 2026-10-02:
+    obs_delta=327 vs ground=650 with a usage message per ended thread)."""
         return _h27_sql("SELECT COUNT(*) FROM messages m JOIN threads t ON t.id = m.thread_id "
-                        "WHERE m.id > %s AND t.hook_caused = false", (base,))[0][0]
+                        "WHERE m.id > %s AND t.hook_caused = false "
+                        "AND m.msg_type IS DISTINCT FROM 'usage'", (base,))[0][0]
 
 
     def _h27_pre_threads(content):
