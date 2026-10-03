@@ -14,10 +14,31 @@ payload-free duplicate-call stub as an agent message with
 `metadata.eff = "duplicate-call"`, so a regression shows up in the daily report /
 dashboard WITHOUT the operator having to complain.
 
+ROLE CALIBRATION (2026-10-03, thread 3995 - the 'edits without commit' class).
+The daily report flagged 19 threads with `edits > 0 and commits == 0`, plus 60
+threads with `tok/state-op > 100k`. Attribution of all 19 (evidence in thread
+3995): 14 were `testing`-step threads, 1 `review`, 2 `running` (one of those DID
+commit), 2 non-kanban; 12 wrote only `/opt/workspace/tester-report.md` (outside
+every repository), the rest only scratch probes under `/opt/workspace/tmp/` or an
+unversioned report under the omni data dir. ZERO had lost repository work. So the
+two delivery rules (edits without commit, tok/state-op > 100k) are now GATED on
+threads that carry a real delivery contract - an executor thread with a kanban
+task - and are merely REPORTED (WATCH, no exit-code impact) for
+verification/ad-hoc threads. Every counter stays visible for every thread, so
+nothing is hidden; only the gate stops reading a tester's report artifact as
+lost work.
+
 Metrics per thread (last HOURS, default 24):
   tools       tool-result messages (executed or answered with a stub)
-  st          state-changing tool results (write/str_replace/insert/apply_patch,
-              git commit/push/sync, docker/ssh run, memory/kanban/subtask writes)
+  st          state-changing tool results, st = st_w + st_x
+  st_w        write-class state ops: a durable change the report can point at
+              (filesystem write-class, git commit/push/sync, memory/subtask/
+              kanban writes)
+  st_x        exec-class state ops: command execution (docker / ssh / workbench)
+              whose durable effect cannot be derived from the tool result - it is
+              counted, but never treated as a durable change (there is no
+              read-only classification anywhere: an unknown command is simply not
+              a write)
   dedup       invocations answered with a duplicate-call stub instead of being
               executed (metadata eff=duplicate-call, or the '[duplicate call'
               stub text) - target 0
@@ -28,8 +49,15 @@ Metrics per thread (last HOURS, default 24):
   ttc         minutes from thread start to the first commit/push (time to first
               commit; a thread with edits but no commit is flagged)
 
-Exit code is 1 when any thread breaks a threshold (dedup > 0, edits > 0 and no
-commit, tok/st > 100k, or EXPECT_EDIT non-delivery) so the script doubles as a GATE.
+Thread classes (from the thread row): `delivery` = a kanban task on an executor
+step; `verification` = workflow step `testing` / `review`; `adhoc` = no kanban
+task (operator / hook / cron thread).
+
+Exit code is 1 when a DELIVERY thread breaks a threshold (edits > 0 and no
+commit, or tok/st > 100k), when ANY thread re-issued a duplicate call
+(dedup > 0), or when EXPECT_EDIT marks a thread as edit-shaped and it produced
+neither edit nor commit - so the script doubles as a GATE. Over-threshold
+verification/ad-hoc threads are printed as WATCH (informational) only.
 
 Usage (inside the toolbox container, or any host with docker access):
   python3 efficiency-metrics.py                       # last 24h, dev stack
@@ -57,10 +85,11 @@ EXPECT_EDIT = (os.environ.get("EXPECT_EDIT") or os.environ.get("EXPECT") or "").
 
 # The duplicate-call STUB carries this structured marker in the message metadata
 # (never a plugin/tool-name list): it is the generic signal of a blocked replay.
-DUP_PREDICATE = ("metadata::text LIKE '%\"eff\":\"duplicate-call\"%' "
-                 "OR content LIKE '[duplicate call%'")
+DUP_PREDICATE = ("m.metadata::text LIKE '%\"eff\":\"duplicate-call\"%' "
+                 "OR m.content LIKE '[duplicate call%'")
 
-STATE_SQL = ",".join("'%s'" % s for s in (
+# write-class: the tool result IS the durable change (a file / repo / row).
+WRITE_CLASS = (
     "filesystem__write",
     "filesystem__str_replace",
     "filesystem__insert",
@@ -68,51 +97,69 @@ STATE_SQL = ",".join("'%s'" % s for s in (
     "git__commit_and_push",
     "git__sync",
     "git__create_github_repo",
+    "memory__promote_to_memory",
+    "memory__manage_memory",
+)
+# exec-class: the tool RAN something; the durable effect is not in its result.
+EXEC_CLASS = (
     "ssh__run",
     "ssh__copy",
     "docker__compose",
-    "memory__promote_to_memory",
-    "memory__manage_memory",
     "workbench__tool",
-))
+)
+WRITE_LIKE = ("m.msg_subtype LIKE 'subtasks__%' OR m.msg_subtype LIKE 'tasks__%' "
+              "OR m.msg_subtype LIKE 'kanban__%'")
 
-STATE_LIKE = ("msg_subtype LIKE 'subtasks__%' OR msg_subtype LIKE 'tasks__%' "
-              "OR msg_subtype LIKE 'kanban__%'")
+EDITS = (
+    "filesystem__write",
+    "filesystem__str_replace",
+    "filesystem__insert",
+    "filesystem__apply_patch",
+)
+
+COMMITS = ("m.msg_subtype IN ('git__commit_and_push','git__sync') "
+           "OR (m.msg_subtype = 'git__run_command' "
+           "AND m.content LIKE '%\"command\":\"git commit%')")
+
+# A thread is `delivery` when it carries a kanban task and is NOT a verification
+# step: those threads owe a commit. Verification and ad-hoc threads have no
+# delivery contract, so their counter overruns are reported, not gated.
+VERIFICATION_STEPS = ("testing", "review")
 
 SQL = """
 WITH t AS (
   SELECT
-    thread_id,
-    count(*) FILTER (WHERE msg_type = 'tool-result') AS tools,
-    count(*) FILTER (WHERE msg_type = 'tool-result' AND (msg_subtype IN ({st}) OR {st_like})) AS st,
-    count(*) FILTER (WHERE msg_type = 'tool-result' AND (
-        msg_subtype = 'filesystem__write'
-        OR msg_subtype IN ('filesystem__str_replace','filesystem__insert','filesystem__apply_patch'))) AS edits,
-    count(*) FILTER (WHERE msg_type = 'tool-result' AND ({dup})) AS dedup,
-    count(*) FILTER (WHERE msg_type = 'tool-result'
-        AND (msg_subtype IN ('git__commit_and_push','git__sync')
-             OR (msg_subtype = 'git__run_command'
-                 AND content LIKE '%"command":"git commit%'))) AS commits,
-    COALESCE(SUM(COALESCE(NULLIF(token_usage::text, '{{}}')::jsonb ->> 'prompt_tokens', '0')::bigint), 0) AS ptok,
-    COALESCE(SUM(COALESCE(NULLIF(token_usage::text, '{{}}')::jsonb ->> 'completion_tokens', '0')::bigint), 0) AS ctok,
-    min(created_at) AS t0,
-    max(created_at) AS t1,
-    min(created_at) FILTER (WHERE msg_type = 'tool-result'
-        AND (msg_subtype IN ('git__commit_and_push','git__sync')
-             OR (msg_subtype = 'git__run_command'
-                 AND content LIKE '%"command":"git commit%'))) AS t_commit
-  FROM messages
+    m.thread_id,
+    count(*) FILTER (WHERE m.msg_type = 'tool-result') AS tools,
+    count(*) FILTER (WHERE m.msg_type = 'tool-result' AND (m.msg_subtype IN ({st_w}) OR {st_like})) AS st_w,
+    count(*) FILTER (WHERE m.msg_type = 'tool-result' AND m.msg_subtype IN ({st_x})) AS st_x,
+    count(*) FILTER (WHERE m.msg_type = 'tool-result' AND m.msg_subtype IN ({edits})) AS edits,
+    count(*) FILTER (WHERE m.msg_type = 'tool-result' AND ({dup})) AS dedup,
+    count(*) FILTER (WHERE m.msg_type = 'tool-result' AND ({commit})) AS commits,
+    COALESCE(SUM(COALESCE(NULLIF(m.token_usage::text, '{{}}')::jsonb ->> 'prompt_tokens', '0')::bigint), 0) AS ptok,
+    COALESCE(SUM(COALESCE(NULLIF(m.token_usage::text, '{{}}')::jsonb ->> 'completion_tokens', '0')::bigint), 0) AS ctok,
+    min(m.created_at) AS t0,
+    max(m.created_at) AS t1,
+    min(m.created_at) FILTER (WHERE m.msg_type = 'tool-result' AND ({commit})) AS t_commit
+  FROM messages m
   WHERE {where}
-  GROUP BY thread_id
+  GROUP BY m.thread_id
 )
-SELECT thread_id, tools, st, edits, dedup, commits, ptok, ctok,
-       to_char(t0, 'MM-DD HH24:MI') AS started,
-       round(EXTRACT(EPOCH FROM (COALESCE(t1, now()) - t0)) / 60.0, 1) AS wall_min,
-       round(EXTRACT(EPOCH FROM (t_commit - t0)) / 60.0, 1) AS ttc_min
+SELECT t.thread_id, t.tools, t.st_w, t.st_x, t.edits, t.dedup, t.commits, t.ptok, t.ctok,
+       to_char(t.t0, 'MM-DD HH24:MI') AS started,
+       round(EXTRACT(EPOCH FROM (COALESCE(t.t1, now()) - t.t0)) / 60.0, 1) AS wall_min,
+       round(EXTRACT(EPOCH FROM (t.t_commit - t.t0)) / 60.0, 1) AS ttc_min,
+       th.workflow_step,
+       th.task_id
 FROM t
-WHERE tools > 0
-ORDER BY t1 DESC;
+LEFT JOIN threads th ON th.id = t.thread_id
+WHERE t.tools > 0
+ORDER BY t.t1 DESC;
 """
+
+
+def sql_list(names) -> str:
+    return ",".join("'%s'" % n for n in names)
 
 
 def psql(sql: str) -> list[list[str]]:
@@ -127,46 +174,81 @@ def psql(sql: str) -> list[list[str]]:
     return [ln.split("|") for ln in out.stdout.splitlines() if ln.strip()]
 
 
+def thread_class(workflow_step, task_id) -> str:
+    """`delivery` = kanban task on a non-verification step; else verification/adhoc.
+
+    The role comes from the thread row that the workflow already maintains - no
+    tool-name heuristics, no message-text matching.
+    """
+    if not task_id or not str(task_id).strip():
+        return "adhoc"
+    if (workflow_step or "").strip().lower() in VERIFICATION_STEPS:
+        return "verification"
+    return "delivery"
+
+
 def main() -> int:
     args = sys.argv[1:]
     as_json = "--json" in args
     hours = float(os.environ.get("HOURS", "24"))
     threads = os.environ.get("THREADS", "").strip()
     if threads:
-        where = "thread_id IN (%s)" % ",".join(t.strip() for t in threads.split(",") if t.strip())
+        where = "m.thread_id IN (%s)" % ",".join(t.strip() for t in threads.split(",") if t.strip())
     else:
-        where = "created_at > now() - interval '%s hours'" % hours
+        where = "m.created_at > now() - interval '%s hours'" % hours
 
-    sql = SQL.format(st=STATE_SQL, st_like=STATE_LIKE, dup=DUP_PREDICATE, where=where)
+    sql = SQL.format(st_w=sql_list(WRITE_CLASS), st_x=sql_list(EXEC_CLASS),
+                     st_like=WRITE_LIKE, edits=sql_list(EDITS), dup=DUP_PREDICATE,
+                     commit=COMMITS, where=where)
     rows = psql(sql)
 
-    report, failures = [], []
+    report, failures, watch = [], [], []
     for r in rows:
-        (tid, tools, st, edits, dedup, commits, ptok, ctok, started, wall, ttc) = r
-        tools, st, edits, dedup, commits = (int(x) for x in (tools, st, edits, dedup, commits))
+        (tid, tools, st_w, st_x, edits, dedup, commits, ptok, ctok,
+         started, wall, ttc, step, task) = r
+        tools, st_w, st_x, edits, dedup, commits = (int(x) for x in
+                                                   (tools, st_w, st_x, edits, dedup, commits))
         ptok, ctok = int(ptok), int(ctok)
         wall = float(wall)
         ttc = float(ttc) if ttc not in ("", None) else None
+        st = st_w + st_x
         toks = ptok + ctok
+        cls = thread_class(step, task)
+        gated = cls == "delivery"
         per_state = (toks / st) if st else float(toks)
-        grade = "OK"
-        reasons = []
+        per_write = int(toks / st_w) if st_w else None
+
+        reasons, watched = [], []
+
+        def note(msg):
+            (reasons if gated else watched).append(msg)
+
         if EXPECT_EDIT and edits == 0 and commits == 0:
             reasons.append("edit-shaped task with no edit and no commit (non-delivery)")
         if dedup > 0:
             reasons.append("%d duplicate call(s) re-issued with no state change" % dedup)
         if edits > 0 and commits == 0:
-            reasons.append("edits without commit")
+            note("edits without commit")
         if st and per_state > 100_000:
-            reasons.append("tok/state-op %.0fk > 100k" % (per_state / 1000))
+            note("tok/state-op %.0fk > 100k" % (per_state / 1000))
+
         if reasons:
             grade = "BREACH: " + "; ".join(reasons)
-            failures.append("thread %s: %s" % (tid, grade))
+            failures.append("thread %s [%s]: %s" % (tid, cls, grade))
+        elif watched:
+            grade = "WATCH: " + "; ".join(watched)
+            watch.append("thread %s [%s]: %s" % (tid, cls, grade))
+        else:
+            grade = "OK"
+
         report.append({
-            "thread_id": int(tid), "tools": tools, "state_changing": st,
+            "thread_id": int(tid), "thread_class": cls,
+            "tools": tools, "state_changing": st,
+            "state_writes": st_w, "state_execs": st_x,
             "edits": edits, "duplicate_calls": dedup, "commits": commits,
             "prompt_tokens": ptok, "completion_tokens": ctok, "tokens": toks,
             "tokens_per_state_op": int(per_state),
+            "tokens_per_write_op": per_write,
             "started": started, "wall_minutes": wall,
             "time_to_first_commit_min": ttc, "grade": grade,
         })
@@ -175,19 +257,31 @@ def main() -> int:
         print(json.dumps(report, indent=2))
     else:
         print("== agent efficiency metrics (%s, %s) ==" % (PG_CONTAINER, where))
-        print("| thread | tools | st | edits | dup | commits | tokens | tok/st-op | wall | ttc | grade |")
-        print("|---|---|---|---|---|---|---|---|---|---|---|")
+        print("| thread | class | tools | st | st-w | st-x | edits | dup | commits | tokens | tok/st-op | wall | ttc | grade |")
+        print("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
         for m in report:
-            print("| %s | %s | %s | %s | %s | %s | %s | %s | %sm | %s | %s |" % (
-                m["thread_id"], m["tools"], m["state_changing"], m["edits"],
-                m["duplicate_calls"], m["commits"], m["tokens"],
-                m["tokens_per_state_op"], m["wall_minutes"],
+            print("| %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %sm | %s | %s |" % (
+                m["thread_id"], m["thread_class"], m["tools"], m["state_changing"],
+                m["state_writes"], m["state_execs"], m["edits"], m["duplicate_calls"],
+                m["commits"], m["tokens"], m["tokens_per_state_op"], m["wall_minutes"],
                 "%.1f" % m["time_to_first_commit_min"] if m["time_to_first_commit_min"] is not None else "-",
                 m["grade"]))
+        top = sorted((m for m in report if m["thread_class"] == "delivery"),
+                     key=lambda x: -x["tokens_per_state_op"])[:5]
+        if top:
+            print("\nworst tok/state-op among DELIVERY threads (what the gate protects):")
+            for m in top:
+                print("  #%s %sk  st=%s (w=%s/x=%s) edits=%s commits=%s %s" % (
+                    m["thread_id"], round(m["tokens_per_state_op"] / 1000),
+                    m["state_changing"], m["state_writes"], m["state_execs"],
+                    m["edits"], m["commits"], m["grade"].split(":")[0]))
         n_dup = sum(m["duplicate_calls"] for m in report)
-        print("\nthreads=%d duplicate_calls=%d breaches=%d" % (len(report), n_dup, len(failures)))
+        print("\nthreads=%d duplicate_calls=%d breaches=%d watch=%d" % (
+            len(report), n_dup, len(failures), len(watch)))
         for f in failures:
             print("BREACH " + f)
+        for w in watch:
+            print("WATCH " + w)
 
     return 1 if failures else 0
 
