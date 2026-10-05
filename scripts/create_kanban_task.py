@@ -47,11 +47,11 @@ def main():
             "body": BODY,
         },
     })
-    r = shared.oc(f"docker exec omnidev-omniagent-1 curl -s -X POST http://localhost:8080/mcp/execute -H 'Content-Type: application/json' -d {repr(payload)}")
+    r = shared.oc(f"docker exec omnidev-omniagent-1 curl -s -X POST http://localhost:8080/mcp/execute -H 'Content-Type: application/json' -H 'X-Omni-Profile: omni' -d {repr(payload)}")
     print(r.stdout[:800])
 
     # Now list tasks to confirm
-    r2 = shared.oc("docker exec omnidev-omniagent-1 curl -s -X POST http://localhost:8080/mcp/execute -H 'Content-Type: application/json' -d '{\"name\":\"tasks__list_kanban_tasks\",\"arguments\":{}}'")
+    r2 = shared.oc("docker exec omnidev-omniagent-1 curl -s -X POST http://localhost:8080/mcp/execute -H 'Content-Type: application/json' -H 'X-Omni-Profile: omni' -d '{\"name\":\"tasks__list_kanban_tasks\",\"arguments\":{}}'")
     print(r2.stdout[:1500])
 
 if __name__ == "__main__":

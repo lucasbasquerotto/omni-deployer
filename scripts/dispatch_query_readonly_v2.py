@@ -187,7 +187,7 @@ def main():
         try:
             r = shared.oc(
                 "docker exec omnidev-omniagent-1 curl -s -X POST http://localhost:8080/mcp/execute "
-                "-H 'Content-Type: application/json' -d " + repr(payload)
+                "-H 'Content-Type: application/json' -H 'X-Omni-Profile: omni' -d " + repr(payload)
             )
             out = r.stdout
             ok = expect in out and (forbid is None or forbid not in out)

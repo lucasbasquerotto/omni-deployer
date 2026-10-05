@@ -129,7 +129,10 @@ def oc_curl(method, path, body=None):
         body_flag = "-H 'Content-Type: application/json' -d @/tmp/_curl_body.json"
     else:
         body_flag = ""
-    r = oc("curl -sf -X " + method + " http://localhost:8080" + path + " " + body_flag)
+    # `/mcp/execute` is scoped to the caller's toolset (omniagent 5c36f0c,
+    # task_omnidev_core_scope_post_mcp_execute): declare the caller profile.
+    ident = "-H 'X-Omni-Profile: omni' "
+    r = oc("curl -sf -X " + method + " http://localhost:8080" + path + " " + ident + body_flag)
     if r.returncode != 0:
         detail = (r.stderr or "").strip() or (r.stdout or "").strip() or "no output (curl -s hides HTTP errors)"
         raise RuntimeError(method + " " + path + " failed (curl rc=" + str(r.returncode) + "): " + detail)
@@ -1935,7 +1938,10 @@ def _mcp_execute(tool_name, args_dict=None):
         args_dict = {}
     body = json.dumps({"name": tool_name, "arguments": args_dict})
     oc_write("/tmp/_mcp_body.json", body)
-    r = oc("curl -sf -X POST http://localhost:8080/mcp/execute -H 'Content-Type: application/json' -d @/tmp/_mcp_body.json")
+    # `/mcp/execute` is scoped to the caller's toolset (omniagent, telegram
+    # 4134): every call must declare the caller profile. This harness calls as
+    # the default `omni` profile (no toolset -> all tools, as before).
+    r = oc("curl -sf -X POST http://localhost:8080/mcp/execute -H 'Content-Type: application/json' -H 'X-Omni-Profile: omni' -d @/tmp/_mcp_body.json")
     if r.returncode != 0:
         return {"success": False, "error": "curl exit " + str(r.returncode) + ": " + r.stderr[:200]}
     try:

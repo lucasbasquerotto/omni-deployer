@@ -40,7 +40,7 @@ STEP 1 - Verify the omniagent plugin compiles and deploy it:
   (plugin binaries resolve as siblings of current_exe() under /target/release/ - no cp needed)
 - docker restart omnidev-omniagent-1
 - Wait ~10s, then verify read-only enforcement via curl INSIDE the container:
-  docker exec omnidev-omniagent-1 curl -s -X POST http://localhost:8080/mcp/execute -H 'Content-Type: application/json' -d '{"name":"query_database","arguments":{"operation":"query","sql":"SELECT current_user"}}'
+  docker exec omnidev-omniagent-1 curl -s -X POST http://localhost:8080/mcp/execute -H 'Content-Type: application/json' -H 'X-Omni-Profile: omni' -d '{"name":"query_database","arguments":{"operation":"query","sql":"SELECT current_user"}}'
   -> content must show "omniagent_readonly"
   Then test the 4 rejection/acceptance cases:
   a) WITH x AS (DELETE FROM messages RETURNING *) SELECT * FROM x  -> MUST be rejected

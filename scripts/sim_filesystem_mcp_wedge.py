@@ -40,7 +40,7 @@ def execute(name, arguments, timeout):
     d = json.dumps({"name": name, "arguments": arguments}).encode()
     req = urllib.request.Request(
         "{}/mcp/execute".format(BASE), data=d, method="POST",
-        headers={"Content-Type": "application/json"})
+        headers={"Content-Type": "application/json", "X-Omni-Profile": "omni"})
     t0 = time.time()
     try:
         resp = json.loads(urllib.request.urlopen(req, timeout=timeout).read())

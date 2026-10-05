@@ -42,6 +42,20 @@ Running twice on a clean repo produces identical results.
 
 import os, sys, json, shutil, subprocess, time, re, signal
 import urllib.request, urllib.error
+
+# `POST /mcp/execute` is scoped to the caller's toolset (omniagent, telegram
+# 4134): a call must declare its caller profile. This harness acts as the
+# default `omni` profile (no toolset -> all tools, the pre-scoping behavior),
+# so the process-wide opener below adds the identity header to every
+# /mcp/execute request.
+class _CallerIdentityHandler(urllib.request.BaseHandler):
+    def http_request(self, req):
+        if "/mcp/execute" in req.full_url:
+            req.add_unredirected_header("X-Omni-Profile", "omni")
+        return req
+
+
+urllib.request.install_opener(urllib.request.build_opener(_CallerIdentityHandler()))
 import uuid
 
 # Test timing accumulator

@@ -131,7 +131,8 @@ def api_execute(tool, arguments, timeout=90):
     body = json.dumps({"name": tool, "arguments": arguments or {}}).encode()
     req = urllib.request.Request(API_BASE + "/mcp/execute", data=body,
                                  method="POST",
-                                 headers={"Content-Type": "application/json"})
+                                 headers={"Content-Type": "application/json",
+                                          "X-Omni-Profile": "omni"})
     t0 = time.time()
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:

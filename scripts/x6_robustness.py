@@ -64,7 +64,7 @@ def mcp_execute_raw(name, args, timeout=90):
     req = urllib.request.Request(
         f"{BASE}/mcp/execute",
         data=json.dumps({"name": name, "arguments": args}).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
+        headers={"Content-Type": "application/json", "X-Omni-Profile": "omni"},
         method="POST",
     )
     with urllib.request.urlopen(req, timeout=timeout) as r:
